@@ -1,0 +1,14 @@
+{
+    "properties": {
+      "objectId": {
+        "type": "keyword"
+      },
+      "plan_medical": {
+        "type": "join",
+        "relations": {
+          "plan": ["membercostshare", "planservice"],
+          "planservice": ["service", "planservice_membercostshare"]
+        }
+      }
+    }
+  }

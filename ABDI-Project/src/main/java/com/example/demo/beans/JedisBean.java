@@ -1,11 +1,22 @@
 package com.example.demo.beans;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.http.HttpHost;
+import org.elasticsearch.action.delete.DeleteRequest;
+import org.elasticsearch.client.RequestOptions;
+import org.elasticsearch.client.RestClient;
+import org.elasticsearch.client.RestHighLevelClient;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import redis.clients.jedis.Jedis;
@@ -21,14 +32,22 @@ public class JedisBean {
 	//the jedis connection pool object..
 	private static JedisPool poolObj = null;
 	
+	@Autowired
+	MessageQueueService messageQueueService;
+	
+
 	public JedisBean() {
 		poolObj = new JedisPool(redisHostName, redisPortNum);
 	}
 	
 	public String addPlanObject(JSONObject jsonObj, String key) {
 		try {
-			if(!isKeyExist(key) && addAllNestedObjects(jsonObj, key))
+			if(!isKeyExist(key) && addAllNestedObjects(jsonObj, key)) {
+				//store the documents(child and parent) in queue and index them
+				String objId = jsonObj.get("objectId").toString();
+				indexQueue(jsonObj, objId);
 				return "Created";
+			}
 			else
 				return "alreadyExists";
 		}catch(JedisException e) {
@@ -40,7 +59,6 @@ public class JedisBean {
 	public boolean addAllNestedObjects(JSONObject jsonObj, String key) {
 		try {
 			Jedis jedis = poolObj.getResource();
-//			Map<String, String> tempMap = new HashMap<String, String>();
 			JSONObject forIndividualObj = new JSONObject();
 			
 			for(Object k:jsonObj.keySet()) {
@@ -64,13 +82,11 @@ public class JedisBean {
 					}
 				}else {
 					forIndividualObj.put(attrKey, attrVal);
-//					tempMap.put(attrKey,  (String) attrVal);
 				}
 			}
 			
 			
 			jedis.set(key, forIndividualObj.toString());
-//			jedis.hmset(key, tempMap);
 			jedis.close();
 		} catch(JedisException e) {
 			e.printStackTrace();
@@ -83,7 +99,6 @@ public class JedisBean {
 	public String getPlanObject(String key) {
 		JSONObject jsonObj = getAllNestedObjects(key);
 		if(jsonObj!=null) {
-//			jsonObj.remove("eTag");
 			return jsonObj.toString();
 		}else {
 			return null;
@@ -115,10 +130,6 @@ public class JedisBean {
 				}
 			}
 			
-			/*Map<String,String> simpleMap = jedis.hgetAll(key);
-			for(String simpleKey : simpleMap.keySet()) {
-				jsonObj.put(simpleKey, simpleMap.get(simpleKey));
-			}*/
 			JSONObject simpleJsonObjs = new JSONObject(jedis.get(key));
 			for(Object kin : simpleJsonObjs.keySet()) {
 				jsonObj.put((String)kin, simpleJsonObjs.get((String) kin));
@@ -134,14 +145,23 @@ public class JedisBean {
 	}
 	
 	public boolean updatePatchPlanObject(JSONObject jsonObj) {
+		if(updatePlanObject(jsonObj)) {
+			String key = jsonObj.getString("objectType") + "_" + jsonObj.getString("objectId");
+			JSONObject updatedJsonObj = getAllNestedObjects(key);
+			deleteAllDocsinIndex(key);
+			indexQueue(updatedJsonObj, updatedJsonObj.get("objectId").toString());
+			return true;
+		}else {
+			return false;
+		}
+	}
+	
+	
+	private boolean updatePlanObject(JSONObject jsonObj) {
 		try {
 			Jedis jedis = poolObj.getResource();
 			String key = jsonObj.get("objectType") + sep + jsonObj.get("objectId");
 			
-			/*Map<String,String> simpleObjMap = jedis.hgetAll(key);
-			if(simpleObjMap.isEmpty()) {
-				simpleObjMap = new HashMap<String,String>();
-			}*/
 			JSONObject simpleJsonObj = new JSONObject();
 			if(jedis.get(key)!=null && !jedis.get(key).isEmpty()) {
 				simpleJsonObj = new JSONObject(jedis.get(key));
@@ -155,7 +175,7 @@ public class JedisBean {
 					String nestedKey = key + sep + attrKey;
 					String nestedId = nestedObj.get("objectType") + sep + nestedObj.get("objectId");
 					jedis.sadd(nestedKey, nestedId);
-					updatePatchPlanObject(nestedObj);
+					updatePlanObject(nestedObj);
 				}else if(attrVal instanceof JSONArray) {
 					JSONArray nestedArr = (JSONArray) attrVal;
 					Iterator<Object> arrObjIterator = nestedArr.iterator();
@@ -164,16 +184,14 @@ public class JedisBean {
 						JSONObject nestedObj = (JSONObject) arrObjIterator.next();
 						String nestedId = nestedObj.get("objectType") + sep + nestedObj.get("objectId");
 						jedis.sadd(nestedKey, nestedId);
-						updatePatchPlanObject(nestedObj);
+						updatePlanObject(nestedObj);
 					}
 				}else {
-//					simpleObjMap.put(attrKey, String.valueOf(attrVal));
 					simpleJsonObj.put(attrKey, attrVal);
 				}
 			}
 			
 			jedis.set(key, simpleJsonObj.toString());
-//			jedis.hmset(key, simpleObjMap);
 			jedis.close();
 			
 			return true;
@@ -183,11 +201,17 @@ public class JedisBean {
 		}
 	}
 	
-	public boolean deletePlanObject(String key) {
-		return deleteAllNestedObjects(key);
+	public boolean deletePlan(String key) {
+		if(deleteAllNestedObjects(key)) {
+			deleteAllDocsinIndex(key);
+			return true;
+		}else {
+			return false;
+		}
 	}
 	
-	private boolean deleteAllNestedObjects(String key) {
+	
+	public boolean deleteAllNestedObjects(String key) {
 		try {
 			Jedis jedis = poolObj.getResource();
 			
@@ -201,6 +225,28 @@ public class JedisBean {
 			}
 			
 			jedis.del(key);
+			messageQueueService.addToMessageQueue(key.split("_")[1], true);
+			jedis.close();
+			return true;
+		}catch(JedisException e) {
+			e.printStackTrace();
+			return false;
+		}
+	}
+	
+	
+	public boolean deleteAllDocsinIndex(String key) {
+		try {
+			Jedis jedis = poolObj.getResource();
+			
+			Set<String> allKeys = jedis.keys(key + sep + "*");
+			for(String k : allKeys) {
+				Set<String> jsonKeySet = jedis.smembers(k);
+				for(String nestedKey : jsonKeySet) {
+					deleteAllDocsinIndex(nestedKey);
+				}
+			}
+			messageQueueService.addToMessageQueue(key.split("_")[1], true);
 			jedis.close();
 			return true;
 		}catch(JedisException e) {
@@ -214,7 +260,6 @@ public class JedisBean {
 			String newEtag = DigestUtils.md5Hex(jsonObj.toString().getBytes());
 			Jedis jedis = poolObj.getResource();
 			jedis.set(key+"eTag", newEtag);
-//			jedis.hset(key, "eTag", newEtag);
 			jedis.close();
 			return newEtag;
 		} catch(JedisException e) {
@@ -227,7 +272,6 @@ public class JedisBean {
 		try {
 			Jedis jedis = poolObj.getResource();
 			String etag = jedis.get(key+"eTag");
-//			String etag = jedis.hget(key, "eTag");
 			jedis.close();
 			return etag;
 		} catch(JedisException e) {
@@ -249,6 +293,52 @@ public class JedisBean {
 			e.printStackTrace();
 			return false;
 		}
+	}
+	
+	private void indexQueue(JSONObject jsonObj, String objId) {
+		JSONObject forIndividualObj = new JSONObject();
+		for(Object key : jsonObj.keySet()) {
+			String attrKey = String.valueOf(key);
+			Object attrVal = jsonObj.get(attrKey);
+			
+			if(attrVal instanceof JSONObject) {
+				JSONObject nestedObj = (JSONObject) attrVal;
+				
+				JSONObject joinObj = new JSONObject();
+				if(attrKey.equals("planserviceCostShares") && nestedObj.getString("objectType").equals("membercostshare")){
+                    joinObj.put("name", "planservice_membercostshare");
+                } else {
+                    joinObj.put("name", nestedObj.getString("objectType"));
+                }
+				joinObj.put("parent", objId);
+				
+				nestedObj.put("plan_medical", joinObj);
+				nestedObj.put("parent_id", objId);
+				messageQueueService.addToMessageQueue(nestedObj.toString(), false);
+//				System.out.println("JSONObject is:\n"+nestedObj.toString());
+			}else if(attrVal instanceof JSONArray) {
+				JSONArray nestedArr = (JSONArray) attrVal;
+				Iterator<Object> arrObjIterator = nestedArr.iterator();
+				while(arrObjIterator.hasNext()) {
+					JSONObject nestedObj = (JSONObject) arrObjIterator.next();
+					nestedObj.put("parent_id", objId);
+					String nestedObjId = nestedObj.getString("objectId");
+					indexQueue(nestedObj, nestedObjId);
+				}
+			}else {
+				forIndividualObj.put(attrKey, attrVal);
+			}
+		}
+		
+		JSONObject joinObj = new JSONObject();
+        joinObj.put("name", forIndividualObj.get("objectType"));
+        if(!forIndividualObj.has("planType")){
+            joinObj.put("parent", forIndividualObj.get("parent_id"));
+        }
+        
+        forIndividualObj.put("plan_medical", joinObj);
+        messageQueueService.addToMessageQueue(forIndividualObj.toString(), false);
+//        System.out.println("Individual parent Objects:\n"+forIndividualObj.toString());
 	}
 
 }

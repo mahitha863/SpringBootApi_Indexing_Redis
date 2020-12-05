@@ -1,0 +1,96 @@
+DELETE plan_index
+
+##########Search Queries##############
+
+GET /plan_index/_search
+{
+  "query": {
+    "match_all": {}
+  }
+}
+
+#simple query
+GET /plan_index/_search
+{
+  "query": {
+    "match": {
+      "_id": "12xvxc345ssdsds-508"
+    }
+  }
+}
+
+#return parent who has_child membercostshare and copay>=0 
+GET /plan_index/_search
+{
+  "query": {
+    "has_child": {
+      "type": "membercostshare",
+      "query": {
+        "range": {
+          "copay": {
+            "gte": "0"
+          }
+        }
+      }
+    }
+  }
+}
+
+#has_child query
+GET /plan_index/_search
+{
+  "query": {
+    "has_child": {
+      "type": "service",
+      "query": {
+        "match_all": {}
+      }
+    }
+  }
+}
+
+#has_parent query
+GET /plan_index/_search
+{
+  "query": {
+    "has_parent": {
+      "parent_type": "plan",
+      "query": {
+        "match_all": {}
+      }
+    }
+  }
+}
+
+# parents who has min children 2
+GET /plan_index/_search
+{
+  "query": {
+    "has_child": {
+      "type": "planservice",
+      "min_children": 2, 
+      "query": {
+        "match_all": {}
+      }
+    }
+  }
+}
+
+
+#Get all parents who has grandchildren of type service
+GET /plan_index/_search
+{
+  "query": {
+    "has_child": {
+      "type": "planservice",
+      "query": {
+        "has_child": {
+          "type": "service",
+          "query": {
+            "match_all": {}
+          }
+        }
+      }
+    }
+  }
+}

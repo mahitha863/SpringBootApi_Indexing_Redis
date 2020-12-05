@@ -30,13 +30,14 @@ public class GetAndValidateToken {
 		// must be made known to the JWS recipient in order to verify the signatures
 		RSAKey rsaJWK = new RSAKeyGenerator(2048).keyID("1234").generate();
 		rsaPublicJWK = rsaJWK.toPublicJWK();
+		System.out.println("rsaJWK: "+ rsaJWK.toString());
 		System.out.println("rsaPublicKey:" + rsaPublicJWK.toString());
 		
 		//Create RSA-signer with the private key
 		JWSSigner signer = new RSASSASigner(rsaJWK);
 		
 		// Prepare JWT with claims set
-		int expireTime = 600;
+		int expireTime = 1800;
 		
 		JWTClaimsSet claimsSet = new JWTClaimsSet.Builder().
 				expirationTime(new Date(new Date().getTime() + expireTime * 1000)).
@@ -63,47 +64,57 @@ public class GetAndValidateToken {
 	
 	
 	
-	public String authorizeToken(@RequestHeader HttpHeaders headers) throws ParseException, JOSEException {
-		String token = headers.getFirst("Authorization");
-		if (token == null || token.isEmpty()) {
-			return "No token Found";
+	public String authorizeToken(@RequestHeader HttpHeaders headers) {
+		try {
+			String token = headers.getFirst("Authorization");
+			if (token == null || token.isEmpty()) {
+				return "No token Found";
+			}
+			
+			if(rsaPublicJWK==null) {
+				return "Token is invalid";
+			}
+
+			if (!token.contains("Bearer ")) {
+				return "Improper Format of Token";
+			}
+			
+			String token1 = "";
+			token1 = token.substring(7);
+
+			boolean authorized = ifAuthorized(token1);
+
+			if (authorized == false) {
+				return "Token is Expired or Invalid Token";
+			}
+			return "Valid Token";
+		}catch(Exception e) {
+			return  "Token is invalid or expired";
 		}
 		
-		if(rsaPublicJWK==null) {
-			return "Token is invalid";
-		}
-
-		if (!token.contains("Bearer ")) {
-			return "Improper Format of Token";
-		}
-		
-		String token1 = "";
-		token1 = token.substring(7);
-
-		boolean authorized = ifAuthorized(token1);
-
-		if (authorized == false) {
-			return "Token is Expired or Invalid Token";
-		}
-		return "Valid Token";
 	}
 	
 	
-	private boolean ifAuthorized(String token) throws ParseException, JOSEException {
-		// On the consumer side, parse the JWS and verify its RSA signature
-		SignedJWT signedJWT = SignedJWT.parse(token);
-		
-		
-		JWSVerifier verifier = new RSASSAVerifier(rsaPublicJWK);
-		// Retrieve / verify the JWT claims according to the app requirements
-		if (!signedJWT.verify(verifier)) {
+	private boolean ifAuthorized(String token) {
+		try {
+			// On the consumer side, parse the JWS and verify its RSA signature
+			SignedJWT signedJWT = SignedJWT.parse(token);
+			
+			
+			JWSVerifier verifier = new RSASSAVerifier(rsaPublicJWK);
+			// Retrieve / verify the JWT claims according to the app requirements
+			if (!signedJWT.verify(verifier)) {
+				return false;
+			}
+			
+			JWTClaimsSet claimSet = signedJWT.getJWTClaimsSet();
+			Date exp = claimSet.getExpirationTime();
+			
+			return new Date().before(exp);
+		}catch(Exception e) {
 			return false;
 		}
 		
-		JWTClaimsSet claimSet = signedJWT.getJWTClaimsSet();
-		Date exp = claimSet.getExpirationTime();
-		
-		return new Date().before(exp);
 	}
 	
 	

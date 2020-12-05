@@ -208,7 +208,7 @@ public class PlanController {
 		}
 		
 		
-		if(jedisObj.deletePlanObject(key) && jedisObj.addAllNestedObjects(inputJsonObj, key)) {
+		if(jedisObj.deletePlan(key) && jedisObj.addPlanObject(inputJsonObj, key).equalsIgnoreCase("Created")) {
 			String eTag = jedisObj.addEtag(inputJsonObj, key);
 
 			String res = "{\"status\": \"Success\", \"message\": \"Updated data with objectId: " + objectId + "\" }";
@@ -233,7 +233,7 @@ public class PlanController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(new JSONObject(res).toString());
         }
-		if(jedisObj.deletePlanObject(key)) {
+		if(jedisObj.deletePlan(key)) {
 			String res = "{\"status\": \"Success\", \"message\": \"Deleted data with objectId: " + objectId + "\" }";
 			return ResponseEntity.ok().body(new JSONObject(res).toString());
 		}else {

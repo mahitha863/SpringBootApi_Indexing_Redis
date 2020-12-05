@@ -1,0 +1,18 @@
+{
+
+	"planCostShares": {
+		"deductible": 5000,
+		"_org": "example.com",
+		"copay": 23,
+		"objectId": "1234vxc2324sdf-501",
+		"objectType": "membercostshare"
+		
+	},
+
+
+	"_org": "example.com",
+	"objectId": "12xvxc345ssdsds-508",
+	"objectType": "plan",
+	"planType": "inNetwork",
+	"creationDate": "12-12-2017"
+}
